@@ -6,6 +6,23 @@ const config = require('../config.json');
 var router = express.Router();
 const cognito = require ('amazon-cognito-identity-js');
 
+
+
+const getPasswordErrors = (req, source)=>{
+	if (source == 'sign-up'){
+		req.check('email', 'Invalid Email').isEmail();
+	}
+	req.check('password','Password must be at least 8 chars long').isLength({min: 8});
+	req.check('password','Password does not match').equals(req.body['confirm_password']);
+	req.check('password','Password does not contain special character').matches(/[$*.{}()?"!@#%&%/,><':;|_~`]/);
+	req.check('password','Password does not contain number').matches(/[0-9]/);
+	req.check('password','Password does not lower case').matches(/[a-z]/);
+	req.check('password','Password does not upper case').matches(/[A-Z]/);
+	
+	return req.validationErrors();
+}
+
+
 const poolData = {
 	UserPoolId: config.amazon.UserPoolId,
 	ClientId : config.amazon.ClientId
@@ -14,17 +31,25 @@ const poolData = {
 const userPool = new cognito.CognitoUserPool(poolData);
 
 router.get('/signup', function(req, res) {
-	res.render('index');
+	res.redirect('index.html');
 });
 
+
 router.post('/signup', function(req, res) {
+	const errors = getPasswordErrors(req, 'sign-up');
+	req.session['sign-up-errors']=[];
+	
+	if(errors){
+		for(let error of errors){
+			req.session['sign-up-errors'].push(error.msg);
+		}
+		console.log(req.session['sign-up-errors']);
+		return res.redirect('/signup');
+	}
+	
 	const email = req.body.email;
 	const pass = req.body.pass;
 	const confirm_pass = req.body.confirm_pass;
-	
-	if(pass !== confirm_pass){
-		return res.redirect('/signup?error=password');
-	}
 
 	const emailData = {
 		Name: 'email',
@@ -54,15 +79,19 @@ router.post('/login', function(req, res) {
 		Pool : userPool
 	}
 
+	req.session['log-in-errors'] = [];
 	const cognitoUser = new cognito.CognitoUser(userDetails);
 	//Password1!
 	
 	cognitoUser.authenticateUser(authDetails, {
 		onSuccess: function(data) {
-			console.log(data);
-			res.status(200).json(data);
+			req.session.sub = data.getIdToken().decodePayload().sub;
+			//res.status(200).json(data);
+			return res.redirect('/loggedIn.html');
+
 		}, //end success
 		onFailure: function (err) {
+			console.log(err.code);
 			res.status(200).json(err);
 		}//end failure
 	})//end auth user
@@ -70,35 +99,42 @@ router.post('/login', function(req, res) {
 
 });
 
+router.post('/change-password', (req, res)=>{
+	if(!req.session.sub){
+		return res.redirect('/login');
+	}
 
-/*
-GET 
+	const errors = getPasswordErrors(req);
+	req.session['change-password-errors'] = []
+
+	if(errors){
+		for(let error of errors){
+			req.session['change-password-errors'].push(error.msg);
+		}
+		console.log(req.session['change-password-errors']);
+		return res.redirect('/loggedIn.html');
+	}
+
+	const userDetails = {Username: req.session.sub, Pool: userPool}
+	const cognitoUser = new cognito.CognitoUser(userDetails);
+
+	cognitoUser.getSession((err, session)=>{
+		if(err || !session.isValid){
+			console.error(err.msg || JSON.stringify(err));
+			return res.redirect('/login');
+		}
+		cognitoUser.changePassword(req.body['old-password'], req.body.password, (err, data)=>{
+			if(err){
+				console.error(err.msg || JSON.stringify(err));
+				return res.redirect('/login');
+			}
+			res.status(200).json(data);
+		})
+
+	})
 
 
-
-*/
-router.get('/apiDoc', function(req, res) {
-	res.status(200).json([
-		{"GET /flyer":" get all flyers"},
-		{"GET /flyer/:id ":" get flyer by ID"},
-		{"POST /flyer POST":" create flyer in db"},
-		{"POST /ticket/:id ":" create new ticket in Blockchain and tie to flyer", payload: {"to":"cgn", "from":"jfk", "date":"2018-08-30T22:49:07.169Z"} },
-		
-		{"POST /luggage/:id/ticket/:ticket":" - add luggage to trip", payload: {"bag":{"w":1, "h":2, "l":3, "weight":4} }  },
-
-	])
-
-});
-
-router.get('/test', function(req, res) {
-	res.status(200).json({'api':'test api'})
-
-});
-
-
-router.post('/test', function(req, res) {
-	res.status(200).json({'api':'test api'})
-});
+})
 
 
 
